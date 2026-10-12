@@ -9,6 +9,7 @@ import { archiveTools, classificationTools, fundingTools, organizationTools } fr
 import { documentTools } from "./documents.js";
 import { webhookTools } from "./webhooks.js";
 import { spendTools } from "./spend.js";
+import { spendReceiptTools } from "./spendReceipts.js";
 import { analyticsTools } from "./analytics.js";
 import { rawTools } from "./raw.js";
 
@@ -30,6 +31,7 @@ export function allTools(config: BillConfig): ToolDefinition[] {
     ...documentTools,
     ...webhookTools,
     ...spendTools,
+    ...spendReceiptTools,
     ...analyticsTools,
     ...rawTools(config),
   ];

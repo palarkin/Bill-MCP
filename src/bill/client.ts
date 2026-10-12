@@ -266,6 +266,45 @@ export class BillClient {
     }
   }
 
+  /**
+   * PUTs bytes to a pre-signed upload URL issued by BILL (e.g. for Spend & Expense receipts). No BILL
+   * credentials are sent; the URL itself authorizes the upload. PUT is idempotent, so transient failures retry.
+   */
+  async uploadToUrl(uploadUrl: string, data: Uint8Array, contentType: string): Promise<void> {
+    const url = new URL(uploadUrl);
+    if (url.protocol !== "https:") throw new Error("Refusing to upload to a non-HTTPS URL.");
+    if (this.dryRun) {
+      throw new DryRunCapture({
+        method: "PUT",
+        url: `${url.origin}${url.pathname}`,
+        headers: { "Content-Type": contentType },
+        body: `<${data.byteLength} bytes>`,
+      });
+    }
+    for (let attempt = 0; ; attempt++) {
+      let response: Response | undefined;
+      let failure: unknown;
+      try {
+        response = await this.fetchImpl(url.toString(), {
+          method: "PUT",
+          headers: { "Content-Type": contentType },
+          body: Buffer.from(data),
+          signal: AbortSignal.timeout(this.config.timeoutMs),
+        });
+        if (response.ok) return;
+      } catch (err) {
+        failure = err;
+      }
+      const retryable = !response || response.status >= 500 || response.status === 429;
+      if (retryable && attempt < this.config.maxRetries) {
+        await sleep(backoffDelay(attempt));
+        continue;
+      }
+      const detail = response ? `HTTP ${response.status} ${(await response.text().catch(() => "")).slice(0, 300)}` : errorMessage(failure);
+      throw new BillApiError({ status: response?.status ?? 0, method: "PUT", path: url.pathname, details: [], message: `Receipt upload failed: ${detail}` });
+    }
+  }
+
   private async fetchWithTimeout(url: string, opts: RequestOptions, headers: Record<string, string>): Promise<Response> {
     const timeout = AbortSignal.timeout(this.config.timeoutMs);
     const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;

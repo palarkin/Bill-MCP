@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool, type ToolDefinition } from "./registry.js";
 import { id } from "./common.js";
+import { missingCoreCredentials } from "../config.js";
 
 export const sessionTools: ToolDefinition[] = [
   defineTool({
@@ -12,6 +13,20 @@ export const sessionTools: ToolDefinition[] = [
     kind: "read",
     input: {},
     handler: async (_args, { client, config }) => {
+      const base = {
+        environment: config.environment,
+        apiBaseUrl: config.apiBaseUrl,
+        readOnly: config.readOnly,
+        moneyMovementEnabled: config.enableMoneyMovement,
+        spendApiConfigured: Boolean(config.spendApiToken),
+        uploadRoot: config.uploadRoot ?? null,
+        toolsets: [...config.toolsets],
+      };
+      const missing = missingCoreCredentials(config);
+      if (missing.length > 0) {
+        // Spend & Expense works with just an API token; report rather than fail.
+        return { ...base, coreApi: `not configured (missing ${missing.join(", ")})` };
+      }
       const session = await client.ensureSession();
       let remote: unknown;
       try {
@@ -20,16 +35,12 @@ export const sessionTools: ToolDefinition[] = [
         remote = { unavailable: err instanceof Error ? err.message : String(err) };
       }
       return {
-        environment: config.environment,
-        apiBaseUrl: config.apiBaseUrl,
+        ...base,
+        coreApi: "connected",
         organizationId: session.organizationId,
         userId: session.userId,
         mfaTrusted: session.trusted,
         rememberMeIdConfigured: Boolean(config.rememberMeId),
-        readOnly: config.readOnly,
-        moneyMovementEnabled: config.enableMoneyMovement,
-        spendApiConfigured: Boolean(config.spendApiToken),
-        toolsets: [...config.toolsets],
         sessionDetails: remote,
       };
     },

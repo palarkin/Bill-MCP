@@ -4,7 +4,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for the [BILL
 
 ## Highlights
 
-- **103 tools across 16 toolsets**: vendors, bills, vendor credits, recurring bills, approvals, AP payments (including international/FX), customers, invoices, AR payments, GL classifications, funding accounts, users and roles, documents, webhooks, Spend & Expense, analytics, and raw API access.
+- **106 tools across 16 toolsets**: vendors, bills, vendor credits, recurring bills, approvals, AP payments (including international/FX), customers, invoices, AR payments, GL classifications, funding accounts, users and roles, documents, webhooks, Spend & Expense, analytics, and raw API access.
 - **Safe by default.** Nothing that moves money (payments, customer charges, vendor bank-detail changes, autopay) is exposed unless you set `BILL_ENABLE_MONEY_MOVEMENT=true`. `BILL_READ_ONLY=true` exposes read tools only. The raw-request tool applies the same guard, so it can't be used to get around it.
 - **Dry runs everywhere.** Every data-changing tool accepts `dryRun: true`. Lookups still run, but the request that would have changed data is returned instead of sent.
 - **Robust client.**
@@ -20,6 +20,67 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for the [BILL
   - Actionable error hints and response-size limits.
 - **Analytics.** AP and AR aging, a weekly cash-requirements forecast, vendor spend summaries, and duplicate-bill detection (including a check before you create a bill).
 - **Resources and prompts.** `bill://guide` documents conventions and `bill://status` reports server state. Workflow prompts: `payment_run`, `enter_bill`, `collections_review`, and `month_end_close`.
+
+## Monthly invoice upload (`/upload-invoice`)
+
+This repo includes a Claude Code skill that attaches invoices from a folder on your computer to the BILL Spend & Expense card transactions still missing receipts.
+
+Each run:
+
+1. Finds card transactions whose receipt is `MISSING` or `NOT_ATTACHED` (for a month you name, or the last 60 days by default).
+2. Reads every PDF/JPG/PNG in your invoices folder and extracts the vendor, total, date and currency.
+3. Matches invoices to transactions by amount, merchant name and date, with a confidence level. Each transaction gets at most one invoice.
+4. Shows you the proposed matches and attaches only the ones you approve. Pass `auto` to attach high-confidence matches without asking.
+5. Uploads each invoice. PDFs become one image per page, since BILL takes JPG/PNG receipts. It then re-checks each transaction's receipt status.
+6. Optionally files attached invoices into `attached/YYYY-MM/` so next month's run skips them.
+
+### One-time setup (on the computer that has your invoices)
+
+1. Install [Claude Code](https://code.claude.com) and Node.js 22+.
+2. Build this server:
+
+   ```bash
+   git clone https://github.com/palarkin/Bill-MCP.git
+   cd Bill-MCP
+   npm install
+   npm run build
+   ```
+
+3. Create a Spend & Expense API token in BILL (an Admin user generates it in Spend & Expense).
+4. Register the server with Claude Code for all your projects:
+
+   ```bash
+   claude mcp add bill --scope user \
+     -e BILL_ENVIRONMENT=production \
+     -e BILL_SPEND_API_TOKEN=your-token \
+     -e BILL_UPLOAD_ROOT="/Users/you/Documents/Invoices" \
+     -- node "$(pwd)/dist/index.js"
+   ```
+
+   - `BILL_UPLOAD_ROOT` is your invoices folder. The server can't read files outside it.
+   - The core-API credentials (`BILL_USERNAME` etc.) are optional for this workflow.
+
+5. Make the skill available everywhere (optional). Otherwise it only appears when Claude Code runs inside this folder:
+
+   ```bash
+   mkdir -p ~/.claude/skills && cp -r .claude/skills/upload-invoice ~/.claude/skills/
+   ```
+
+### Monthly use
+
+```
+claude
+> /upload-invoice September
+```
+
+Other forms: `/upload-invoice` (last 60 days), `/upload-invoice 2026-09-01 to 2026-09-30`, `/upload-invoice September auto`.
+
+Supported files: PDF, PNG, JPG (GIF/WebP are converted). HEIC photos need exporting to JPG first. PDFs over 5 pages attach the first 5 unless you ask for more.
+
+The receipt tools can also be used directly:
+- `bill_spend_list_transactions_missing_receipts`
+- `bill_spend_match_invoices`
+- `bill_spend_attach_receipt` (supports `dryRun`)
 
 ## Quick start
 
@@ -289,6 +350,9 @@ These are sent as `filters=vendorId:eq:"009...",paymentStatus:in:"UNPAID,PARTIAL
 | `bill_spend_get_transaction` | read | Gets one card transaction. |
 | `bill_spend_list_reimbursements` | read | Lists out-of-pocket reimbursement requests. |
 | `bill_spend_get_reimbursement` | read | Gets one reimbursement request. |
+| `bill_spend_list_transactions_missing_receipts` | read | Lists Spend & Expense card transactions that still need a receipt/invoice (receiptStatus MISSING or NOT_ATTACHED), excluding declined transactions. |
+| `bill_spend_match_invoices` | read | Given facts read from invoice files (vendor, total, date, currency), finds the Spend & Expense transactions missing receipts that each invoice belongs to. |
+| `bill_spend_attach_receipt` | write | Attaches an invoice/receipt file to a Spend & Expense card transaction. |
 
 **analytics**
 
@@ -321,6 +385,7 @@ Endpoint paths, auth, pagination, filter syntax, rate limits, MFA, webhook signi
 - approval policies
 - the webhook event catalog path
 - Spend & Expense create calls
+- the Spend & Expense attach-receipt body. `bill_spend_attach_receipt` tries the known body shapes in order and remembers the one BILL accepts; a rejected shape (HTTP 400) attaches nothing.
 
 To cover gaps:
 
